@@ -4,203 +4,351 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// ESP32 CHESS CLOCK - VERSION 0.3
-// Dos OLED + dos botones + pausa y reset
+// =====================================
+// ESP32 CHESS CLOCK - VERSION 0.4
+// Menu + Fischer + pausa + reinicio
+// =====================================
 
-constexpr uint8_t BOTON_J1 = 25;
-constexpr uint8_t BOTON_J2 = 26;
-constexpr uint8_t BOTON_CONTROL = 27;
-
-constexpr uint32_t TIEMPO_INICIAL = 300000UL;
-constexpr uint32_t REBOTE_MS = 50;
-constexpr uint32_t RESET_MS = 3000;
+constexpr uint8_t PIN_J1 = 25;
+constexpr uint8_t PIN_J2 = 26;
+constexpr uint8_t PIN_CENTRAL = 27;
 
 constexpr uint8_t OLED_ADDR = 0x3C;
-constexpr int ANCHO = 128;
-constexpr int ALTO = 64;
+constexpr uint32_t REBOTE_MS = 50;
+constexpr uint32_t VOLVER_MS = 2000;
+constexpr uint32_t RESET_MS = 3000;
 
-// Buses I2C independientes
-TwoWire I2C_1(0);
-TwoWire I2C_2(1);
+TwoWire BUS1(0);
+TwoWire BUS2(1);
 
-Adafruit_SSD1306 oled1(ANCHO, ALTO, &I2C_1, -1);
-Adafruit_SSD1306 oled2(ANCHO, ALTO, &I2C_2, -1);
+Adafruit_SSD1306 oled1(128, 64, &BUS1, -1);
+Adafruit_SSD1306 oled2(128, 64, &BUS2, -1);
+
+// =====================================
+// RITMOS DISPONIBLES
+// =====================================
+
+struct Ritmo {
+    uint16_t minutos;
+    uint8_t incremento;
+};
+
+const Ritmo ritmos[] = {
+    {3, 2},
+    {5, 0},
+    {10, 5},
+    {15, 10},
+    {30, 0}
+};
+
+constexpr uint8_t CANT_RITMOS =
+    sizeof(ritmos) / sizeof(ritmos[0]);
+
+uint8_t ritmoActual = 1; // 5+0 inicial
+
+// =====================================
+// ESTADOS DEL RELOJ
+// =====================================
 
 enum Estado {
-    ESPERANDO,
-    TURNO_J1,
-    TURNO_J2,
+    MENU,
+    CONFIRMADO,
+    LISTO,
+    JUGANDO_J1,
+    JUGANDO_J2,
     PAUSADO,
     FINALIZADO
 };
 
-Estado estado = ESPERANDO;
-Estado estadoAntesPausa = ESPERANDO;
+Estado estado = MENU;
+Estado estadoAntesPausa = LISTO;
 
-uint32_t tiempoJ1 = TIEMPO_INICIAL;
-uint32_t tiempoJ2 = TIEMPO_INICIAL;
-
+uint32_t tiempoJ1 = 300000;
+uint32_t tiempoJ2 = 300000;
 uint32_t ultimoTick = 0;
 uint32_t ultimaPantalla = 0;
-uint32_t ultimoSerial = 0;
+
+// Ultima posicion del mecanismo
+// 0 = desconocida
+// 1 = izquierdo abajo
+// 2 = derecho abajo
+uint8_t ultimaPosicion = 0;
+
+// =====================================
+// BOTONES CON ANTIRREBOTE
+// =====================================
 
 struct Boton {
     uint8_t pin;
-    bool lecturaAnterior;
-    bool estadoEstable;
-    uint32_t ultimoCambio;
+    bool anterior;
+    bool estable;
+    uint32_t cambio;
 
-    // Constructor del boton
-    Boton(uint8_t numeroPin) {
-        pin = numeroPin;
-        lecturaAnterior = HIGH;
-        estadoEstable = HIGH;
-        ultimoCambio = 0;
+    Boton(uint8_t p) {
+        pin = p;
+        anterior = HIGH;
+        estable = HIGH;
+        cambio = 0;
     }
 };
 
-// Inicializar los tres botones
-Boton boton1(BOTON_J1);
-Boton boton2(BOTON_J2);
-Boton control(BOTON_CONTROL);
+Boton boton1(PIN_J1);
+Boton boton2(PIN_J2);
+Boton central(PIN_CENTRAL);
 
+void iniciarBoton(Boton &b) {
+    pinMode(b.pin, INPUT_PULLUP);
 
-// Detecta cambios estables
-// Retorna true cuando cambia de estado
-bool actualizarBoton(Boton &b) {
+    // Leer posicion fisica inicial
+    b.anterior = digitalRead(b.pin);
+    b.estable = b.anterior;
+    b.cambio = millis();
+}
+
+bool actualizarBoton(Boton &b, uint32_t ahora) {
     bool lectura = digitalRead(b.pin);
-    uint32_t ahora = millis();
 
-    if (lectura != b.lecturaAnterior) {
-        b.ultimoCambio = ahora;
+    if (lectura != b.anterior) {
+        b.cambio = ahora;
     }
 
-    b.lecturaAnterior = lectura;
+    b.anterior = lectura;
 
-    if (ahora - b.ultimoCambio >= REBOTE_MS &&
-        lectura != b.estadoEstable) {
-        b.estadoEstable = lectura;
+    if (ahora - b.cambio >= REBOTE_MS &&
+        lectura != b.estable) {
+        b.estable = lectura;
         return true;
     }
 
     return false;
 }
 
-// Control del tercer boton
-uint32_t inicioControl = 0;
-bool resetEjecutado = false;
+// =====================================
+// CONFIGURACION DE TIEMPO
+// =====================================
 
-void reiniciarReloj() {
-    tiempoJ1 = TIEMPO_INICIAL;
-    tiempoJ2 = TIEMPO_INICIAL;
+void cargarTiempoElegido() {
+    uint32_t inicial =
+        (uint32_t)ritmos[ritmoActual].minutos * 60000UL;
 
-    estado = ESPERANDO;
-    estadoAntesPausa = ESPERANDO;
+    tiempoJ1 = inicial;
+    tiempoJ2 = inicial;
+}
 
+void reiniciarPartida() {
+    cargarTiempoElegido();
+    estado = LISTO;
+    estadoAntesPausa = LISTO;
     ultimoTick = millis();
 
-    Serial.println("RELOJ REINICIADO");
+    Serial.println("PARTIDA REINICIADA");
 }
 
-void alternarPausa() {
-    if (estado == PAUSADO) {
-        estado = estadoAntesPausa;
-        ultimoTick = millis();
-        Serial.println("RELOJ REANUDADO");
-    }
-    else if (estado == TURNO_J1 ||
-             estado == TURNO_J2) {
-        estadoAntesPausa = estado;
-        estado = PAUSADO;
-        Serial.println("RELOJ PAUSADO");
-    }
+void siguienteRitmo() {
+    ritmoActual = (ritmoActual + 1) % CANT_RITMOS;
+
+    Serial.print("Ritmo: ");
+    Serial.print(ritmos[ritmoActual].minutos);
+    Serial.print("+");
+    Serial.println(ritmos[ritmoActual].incremento);
 }
 
-void procesarControl(uint32_t ahora) {
-    if (actualizarBoton(control)) {
-        if (control.estadoEstable == LOW) {
-            inicioControl = ahora;
-            resetEjecutado = false;
-        }
-        else {
-            if (!resetEjecutado) {
-                alternarPausa();
-            }
-        }
-    }
-
-    // Mantener pulsado 3 segundos
-    if (control.estadoEstable == LOW &&
-        !resetEjecutado &&
-        ahora - inicioControl >= RESET_MS) {
-
-        reiniciarReloj();
-        resetEjecutado = true;
-    }
-}
+// =====================================
+// TEMPORIZADORES
+// =====================================
 
 void actualizarTiempo(uint32_t ahora) {
-    uint32_t transcurrido = ahora - ultimoTick;
+    uint32_t delta = ahora - ultimoTick;
     ultimoTick = ahora;
 
     uint32_t *activo = nullptr;
 
-    if (estado == TURNO_J1) {
+    if (estado == JUGANDO_J1) {
         activo = &tiempoJ1;
-    }
-    else if (estado == TURNO_J2) {
+    } else if (estado == JUGANDO_J2) {
         activo = &tiempoJ2;
     }
 
-    if (activo == nullptr) return;
+    if (!activo) return;
 
-    if (transcurrido >= *activo) {
+    if (delta >= *activo) {
         *activo = 0;
         estado = FINALIZADO;
         Serial.println("TIEMPO AGOTADO");
-    }
-    else {
-        *activo -= transcurrido;
+    } else {
+        *activo -= delta;
     }
 }
 
-void procesarJugadores() {
-    bool evento1 = actualizarBoton(boton1);
-    bool evento2 = actualizarBoton(boton2);
+void cambiarTurno(uint8_t lado) {
+    if (estado == LISTO) {
+        estado = (lado == 1)
+            ? JUGANDO_J2
+            : JUGANDO_J1;
 
-    bool j1 = evento1 && boton1.estadoEstable == LOW;
-    bool j2 = evento2 && boton2.estadoEstable == LOW;
-
-    if (estado == PAUSADO || estado == FINALIZADO) {
+        Serial.println("PARTIDA INICIADA");
         return;
     }
 
-    if (control.estadoEstable == LOW) return;
-    if (j1 && j2) return;
+    uint32_t incremento =
+        (uint32_t)ritmos[ritmoActual].incremento * 1000UL;
 
-    if (j1 && (estado == ESPERANDO ||
-               estado == TURNO_J1)) {
-        estado = TURNO_J2;
-        Serial.println("TURNO JUGADOR 2");
+    if (lado == 1 && estado == JUGANDO_J1) {
+        // J1 termino su jugada
+        tiempoJ1 += incremento;
+        estado = JUGANDO_J2;
     }
-    else if (j2 && (estado == ESPERANDO ||
-                    estado == TURNO_J2)) {
-        estado = TURNO_J1;
-        Serial.println("TURNO JUGADOR 1");
+    else if (lado == 2 && estado == JUGANDO_J2) {
+        // J2 termino su jugada
+        tiempoJ2 += incremento;
+        estado = JUGANDO_J1;
     }
 }
 
-// Dibujar tiempo y estado
-void dibujarReloj(
+// =====================================
+// CONTROL DE BOTONES GRANDES
+// =====================================
+
+void procesarLaterales(uint32_t ahora) {
+    bool cambio1 = actualizarBoton(boton1, ahora);
+    bool cambio2 = actualizarBoton(boton2, ahora);
+
+    // Solo nos interesan nuevas activaciones
+    bool presionado1 = cambio1 && boton1.estable == LOW;
+    bool presionado2 = cambio2 && boton2.estable == LOW;
+
+    if (central.estable == LOW) return;
+
+    // Ignorar pulsaciones simultaneas
+    if (presionado1 && presionado2) return;
+
+    uint8_t posicion = 0;
+
+    if (presionado1) posicion = 1;
+    if (presionado2) posicion = 2;
+
+    if (posicion == 0) return;
+
+    // El mecanismo debe alternar de lado
+    if (posicion == ultimaPosicion) return;
+
+    // En modo menu: cambiar ritmo
+    if (estado == MENU) {
+        ultimaPosicion = posicion;
+        siguienteRitmo();
+        return;
+    }
+
+    // En modo partida: cambiar turno
+    if (estado == LISTO ||
+        estado == JUGANDO_J1 ||
+        estado == JUGANDO_J2) {
+
+        // No aceptar una posicion repetida
+        if (estado == JUGANDO_J1 && posicion != 1)
+            return;
+
+        if (estado == JUGANDO_J2 && posicion != 2)
+            return;
+
+        ultimaPosicion = posicion;
+        cambiarTurno(posicion);
+    }
+}
+
+// =====================================
+// CONTROL CENTRAL
+// =====================================
+
+uint32_t inicioCentral = 0;
+bool accionLarga = false;
+
+void accionCortaCentral() {
+    switch (estado) {
+        case MENU:
+            estado = CONFIRMADO;
+            Serial.println("RITMO CONFIRMADO");
+            break;
+
+        case CONFIRMADO:
+            cargarTiempoElegido();
+            estado = LISTO;
+            ultimoTick = millis();
+            Serial.println("RELOJ LISTO");
+            break;
+
+        case JUGANDO_J1:
+        case JUGANDO_J2:
+            estadoAntesPausa = estado;
+            estado = PAUSADO;
+            Serial.println("PAUSA");
+            break;
+
+        case PAUSADO:
+            estado = estadoAntesPausa;
+            ultimoTick = millis();
+            Serial.println("REANUDADO");
+            break;
+
+        default:
+            break;
+    }
+}
+
+void procesarCentral(uint32_t ahora) {
+    bool cambio = actualizarBoton(central, ahora);
+
+    if (cambio) {
+        if (central.estable == LOW) {
+            inicioCentral = ahora;
+            accionLarga = false;
+        } else if (!accionLarga) {
+            accionCortaCentral();
+        }
+    }
+
+    if (central.estable != LOW || accionLarga)
+        return;
+
+    uint32_t duracion = ahora - inicioCentral;
+
+    // Volver al menu desde confirmacion
+    if (estado == CONFIRMADO &&
+        duracion >= VOLVER_MS) {
+
+        estado = MENU;
+        accionLarga = true;
+        Serial.println("VOLVER AL MENU");
+    }
+
+    // Reiniciar durante la partida o al finalizar
+    else if (
+        (estado == LISTO ||
+         estado == JUGANDO_J1 ||
+         estado == JUGANDO_J2 ||
+         estado == PAUSADO ||
+         estado == FINALIZADO) &&
+        duracion >= RESET_MS) {
+
+        reiniciarPartida();
+        accionLarga = true;
+    }
+}
+
+// =====================================
+// DIBUJAR PANTALLAS
+// =====================================
+
+void dibujarTiempo(
     Adafruit_SSD1306 &oled,
     uint8_t jugador,
     uint32_t tiempo
 ) {
     oled.clearDisplay();
     oled.setTextColor(SSD1306_WHITE);
-
     oled.setTextSize(1);
-    oled.setCursor(34, 3);
+
+    oled.setCursor(35, 3);
     oled.print("JUGADOR ");
     oled.print(jugador);
 
@@ -210,19 +358,16 @@ void dibujarReloj(
     uint32_t minutos = total / 60;
     uint32_t segundos = total % 60;
 
-    char texto[12];
-    snprintf(texto, sizeof(texto), "%02lu:%02lu",
-             (unsigned long)minutos,
-             (unsigned long)segundos);
+    char reloj[12];
+    snprintf(reloj, sizeof(reloj), "%02lu:%02lu",
+        (unsigned long)minutos,
+        (unsigned long)segundos);
 
     oled.setTextSize(3);
     oled.setCursor(19, 23);
-    oled.print(texto);
+    oled.print(reloj);
 
     oled.setTextSize(1);
-
-    bool activo = (jugador == 1 && estado == TURNO_J1) ||
-                  (jugador == 2 && estado == TURNO_J2);
 
     const char *mensaje = "EN ESPERA";
 
@@ -232,76 +377,124 @@ void dibujarReloj(
     else if (estado == FINALIZADO && tiempo == 0) {
         mensaje = "SIN TIEMPO";
     }
-    else if (activo) {
+    else if ((jugador == 1 && estado == JUGANDO_J1) ||
+             (jugador == 2 && estado == JUGANDO_J2)) {
         mensaje = "CORRIENDO";
     }
 
-    int anchoTexto = strlen(mensaje) * 6;
-    oled.setCursor((128 - anchoTexto) / 2, 55);
+    oled.setCursor((128 - strlen(mensaje) * 6) / 2, 55);
     oled.print(mensaje);
-
     oled.display();
 }
 
-void actualizarPantallas() {
-    dibujarReloj(oled1, 1, tiempoJ1);
-    dibujarReloj(oled2, 2, tiempoJ2);
+void dibujarMenu() {
+    oled1.clearDisplay();
+    oled2.clearDisplay();
+
+    oled1.setTextColor(SSD1306_WHITE);
+    oled2.setTextColor(SSD1306_WHITE);
+
+    oled1.setTextSize(1);
+    oled1.setCursor(15, 3);
+    oled1.print("ELEGIR RITMO");
+
+    oled1.setTextSize(3);
+    oled1.setCursor(16, 23);
+    oled1.print(ritmos[ritmoActual].minutos);
+    oled1.print("+");
+    oled1.print(ritmos[ritmoActual].incremento);
+
+    oled1.setTextSize(1);
+    oled1.setCursor(12, 55);
+    oled1.print("BOTONES GRANDES");
+
+    oled2.setTextSize(1);
+    oled2.setCursor(28, 5);
+    oled2.print("ESP32 CLOCK");
+
+    oled2.setTextSize(2);
+    oled2.setCursor(22, 25);
+
+    if (estado == MENU) {
+        oled2.print("ELEGIR");
+    } else {
+        oled2.print("EMPEZAR");
+    }
+
+    oled2.setTextSize(1);
+    oled2.setCursor(15, 55);
+    oled2.print("BOTON CENTRAL");
+
+    oled1.display();
+    oled2.display();
 }
+
+void actualizarPantallas() {
+    if (estado == MENU || estado == CONFIRMADO) {
+        dibujarMenu();
+    } else {
+        dibujarTiempo(oled1, 1, tiempoJ1);
+        dibujarTiempo(oled2, 2, tiempoJ2);
+    }
+}
+
+// =====================================
+// INICIALIZACION
+// =====================================
 
 void setup() {
     Serial.begin(115200);
 
-    pinMode(BOTON_J1, INPUT_PULLUP);
-    pinMode(BOTON_J2, INPUT_PULLUP);
-    pinMode(BOTON_CONTROL, INPUT_PULLUP);
+    iniciarBoton(boton1);
+    iniciarBoton(boton2);
+    iniciarBoton(central);
 
-    I2C_1.begin(21, 22, 100000);
-    I2C_2.begin(18, 19, 100000);
+    // Reconocer una posicion inicial
+    // sin interpretarla como pulsacion
+    if (boton1.estable == LOW && boton2.estable == HIGH)
+        ultimaPosicion = 1;
+    else if (boton2.estable == LOW && boton1.estable == HIGH)
+        ultimaPosicion = 2;
 
-    if (!oled1.begin(
-        SSD1306_SWITCHCAPVCC, OLED_ADDR, true, false)) {
+    BUS1.begin(21, 22, 100000);
+    BUS2.begin(18, 19, 100000);
+
+    if (!oled1.begin(SSD1306_SWITCHCAPVCC,
+                     OLED_ADDR, true, false)) {
         Serial.println("ERROR OLED 1");
         while (true) delay(1000);
     }
 
-    if (!oled2.begin(
-        SSD1306_SWITCHCAPVCC, OLED_ADDR, true, false)) {
+    if (!oled2.begin(SSD1306_SWITCHCAPVCC,
+                     OLED_ADDR, true, false)) {
         Serial.println("ERROR OLED 2");
         while (true) delay(1000);
     }
 
+    cargarTiempoElegido();
+
     ultimoTick = millis();
     ultimaPantalla = ultimoTick;
-    ultimoSerial = ultimoTick;
 
+    Serial.println("ESP32 CHESS CLOCK V0.4");
+    Serial.println("SELECCIONAR RITMO");
     actualizarPantallas();
-
-    Serial.println("ESP32 CHESS CLOCK V0.3");
-    Serial.println("Dos OLED y tres botones");
-    Serial.println("Control corto: pausa/reanudar");
-    Serial.println("Control 3 segundos: reset");
 }
+
+// =====================================
+// BUCLE PRINCIPAL
+// =====================================
 
 void loop() {
     uint32_t ahora = millis();
 
     actualizarTiempo(ahora);
-    procesarControl(ahora);
-    procesarJugadores();
+    procesarCentral(ahora);
+    procesarLaterales(ahora);
 
     if (ahora - ultimaPantalla >= 100) {
         ultimaPantalla = ahora;
         actualizarPantallas();
-    }
-
-    if (ahora - ultimoSerial >= 1000) {
-        ultimoSerial = ahora;
-
-        Serial.print("J1: ");
-        Serial.print(tiempoJ1 / 1000);
-        Serial.print(" s | J2: ");
-        Serial.print(tiempoJ2 / 1000);
-        Serial.println(" s");
     }
 
     delay(1);
