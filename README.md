@@ -119,6 +119,13 @@ The electronic board is being developed using **KiCad 9.0**.
 
 A custom ESP32 footprint and reed switch footprint have been created for the project.
 
+<h3 align="center">PCB Design & 3D Visualization</h3>
+
+<p align="center">
+  <img src="img/ChessClock%20pcb.png" width="48%" alt="KiCad PCB layout">
+  <img src="img/ChessClock%203d.png" width="48%" alt="KiCad 3D PCB visualization">
+</p>
+
 ### PCB Specifications
 
 | Parameter | Design |
