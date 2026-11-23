@@ -4,6 +4,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#include <WiFi.h>
+#include "wifi_secrets.h"
+
 // =====================================
 // ESP32 CHESS CLOCK - VERSION 0.4
 // Menu + Fischer + pausa + reinicio
@@ -17,6 +20,15 @@ constexpr uint8_t OLED_ADDR = 0x3C;
 constexpr uint32_t REBOTE_MS = 50;
 constexpr uint32_t VOLVER_MS = 2000;
 constexpr uint32_t RESET_MS = 3000;
+
+// =====================================
+// ANDESCHESS LIVE - WIFI
+// =====================================
+
+constexpr uint32_t WIFI_REINTENTO_MS = 15000;
+
+uint32_t ultimoIntentoWiFi = 0;
+bool wifiConectadoAnterior = false;
 
 TwoWire BUS1(0);
 TwoWire BUS2(1);
@@ -438,6 +450,54 @@ void actualizarPantallas() {
     }
 }
 
+
+
+void iniciarWiFi() {
+    Serial.println();
+    Serial.println("ANDESCHESS LIVE - WIFI");
+    Serial.println("Iniciando conexion...");
+
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    ultimoIntentoWiFi = millis();
+}
+
+void actualizarWiFi(uint32_t ahora) {
+    bool conectado = WiFi.status() == WL_CONNECTED;
+
+    // Detectar nueva conexion
+    if (conectado && !wifiConectadoAnterior) {
+        Serial.println();
+        Serial.println("WIFI CONECTADO");
+
+        Serial.print("Direccion IP: ");
+        Serial.println(WiFi.localIP());
+
+        Serial.print("Potencia de senal: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+    }
+
+    // Detectar perdida de conexion
+    if (!conectado && wifiConectadoAnterior) {
+        Serial.println("WIFI DESCONECTADO");
+        Serial.println("El reloj sigue funcionando normalmente");
+    }
+
+    wifiConectadoAnterior = conectado;
+
+    // Reintento periodico sin esperar en un bucle
+    if (!conectado &&
+        ahora - ultimoIntentoWiFi >= WIFI_REINTENTO_MS) {
+
+        ultimoIntentoWiFi = ahora;
+        WiFi.reconnect();
+    }
+}
+
+
 // =====================================
 // INICIALIZACION
 // =====================================
@@ -479,6 +539,7 @@ void setup() {
     Serial.println("ESP32 CHESS CLOCK V0.4");
     Serial.println("SELECCIONAR RITMO");
     actualizarPantallas();
+    iniciarWiFi();
 }
 
 // =====================================
@@ -491,6 +552,7 @@ void loop() {
     actualizarTiempo(ahora);
     procesarCentral(ahora);
     procesarLaterales(ahora);
+    actualizarWiFi(ahora);
 
     if (ahora - ultimaPantalla >= 100) {
         ultimaPantalla = ahora;
