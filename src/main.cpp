@@ -6,6 +6,10 @@
 
 #include <WiFi.h>
 #include "wifi_secrets.h"
+#include "firebase_auth.h"
+#include "firebase_sync.h"
+
+#include <sys/time.h>
 
 // =====================================
 // ESP32 CHESS CLOCK - VERSION 0.4
@@ -40,7 +44,8 @@ Adafruit_SSD1306 oled2(128, 64, &BUS2, -1);
 // RITMOS DISPONIBLES
 // =====================================
 
-struct Ritmo {
+struct Ritmo
+{
     uint16_t minutos;
     uint8_t incremento;
 };
@@ -50,8 +55,7 @@ const Ritmo ritmos[] = {
     {5, 0},
     {10, 5},
     {15, 10},
-    {30, 0}
-};
+    {30, 0}};
 
 constexpr uint8_t CANT_RITMOS =
     sizeof(ritmos) / sizeof(ritmos[0]);
@@ -62,7 +66,8 @@ uint8_t ritmoActual = 1; // 5+0 inicial
 // ESTADOS DEL RELOJ
 // =====================================
 
-enum Estado {
+enum Estado
+{
     MENU,
     CONFIRMADO,
     LISTO,
@@ -90,13 +95,15 @@ uint8_t ultimaPosicion = 0;
 // BOTONES CON ANTIRREBOTE
 // =====================================
 
-struct Boton {
+struct Boton
+{
     uint8_t pin;
     bool anterior;
     bool estable;
     uint32_t cambio;
 
-    Boton(uint8_t p) {
+    Boton(uint8_t p)
+    {
         pin = p;
         anterior = HIGH;
         estable = HIGH;
@@ -108,7 +115,8 @@ Boton boton1(PIN_J1);
 Boton boton2(PIN_J2);
 Boton central(PIN_CENTRAL);
 
-void iniciarBoton(Boton &b) {
+void iniciarBoton(Boton &b)
+{
     pinMode(b.pin, INPUT_PULLUP);
 
     // Leer posicion fisica inicial
@@ -117,17 +125,20 @@ void iniciarBoton(Boton &b) {
     b.cambio = millis();
 }
 
-bool actualizarBoton(Boton &b, uint32_t ahora) {
+bool actualizarBoton(Boton &b, uint32_t ahora)
+{
     bool lectura = digitalRead(b.pin);
 
-    if (lectura != b.anterior) {
+    if (lectura != b.anterior)
+    {
         b.cambio = ahora;
     }
 
     b.anterior = lectura;
 
     if (ahora - b.cambio >= REBOTE_MS &&
-        lectura != b.estable) {
+        lectura != b.estable)
+    {
         b.estable = lectura;
         return true;
     }
@@ -139,7 +150,8 @@ bool actualizarBoton(Boton &b, uint32_t ahora) {
 // CONFIGURACION DE TIEMPO
 // =====================================
 
-void cargarTiempoElegido() {
+void cargarTiempoElegido()
+{
     uint32_t inicial =
         (uint32_t)ritmos[ritmoActual].minutos * 60000UL;
 
@@ -147,7 +159,8 @@ void cargarTiempoElegido() {
     tiempoJ2 = inicial;
 }
 
-void reiniciarPartida() {
+void reiniciarPartida()
+{
     cargarTiempoElegido();
     estado = LISTO;
     estadoAntesPausa = LISTO;
@@ -156,7 +169,8 @@ void reiniciarPartida() {
     Serial.println("PARTIDA REINICIADA");
 }
 
-void siguienteRitmo() {
+void siguienteRitmo()
+{
     ritmoActual = (ritmoActual + 1) % CANT_RITMOS;
 
     Serial.print("Ritmo: ");
@@ -169,34 +183,44 @@ void siguienteRitmo() {
 // TEMPORIZADORES
 // =====================================
 
-void actualizarTiempo(uint32_t ahora) {
+void actualizarTiempo(uint32_t ahora)
+{
     uint32_t delta = ahora - ultimoTick;
     ultimoTick = ahora;
 
     uint32_t *activo = nullptr;
 
-    if (estado == JUGANDO_J1) {
+    if (estado == JUGANDO_J1)
+    {
         activo = &tiempoJ1;
-    } else if (estado == JUGANDO_J2) {
+    }
+    else if (estado == JUGANDO_J2)
+    {
         activo = &tiempoJ2;
     }
 
-    if (!activo) return;
+    if (!activo)
+        return;
 
-    if (delta >= *activo) {
+    if (delta >= *activo)
+    {
         *activo = 0;
         estado = FINALIZADO;
         Serial.println("TIEMPO AGOTADO");
-    } else {
+    }
+    else
+    {
         *activo -= delta;
     }
 }
 
-void cambiarTurno(uint8_t lado) {
-    if (estado == LISTO) {
+void cambiarTurno(uint8_t lado)
+{
+    if (estado == LISTO)
+    {
         estado = (lado == 1)
-            ? JUGANDO_J2
-            : JUGANDO_J1;
+                     ? JUGANDO_J2
+                     : JUGANDO_J1;
 
         Serial.println("PARTIDA INICIADA");
         return;
@@ -205,12 +229,14 @@ void cambiarTurno(uint8_t lado) {
     uint32_t incremento =
         (uint32_t)ritmos[ritmoActual].incremento * 1000UL;
 
-    if (lado == 1 && estado == JUGANDO_J1) {
+    if (lado == 1 && estado == JUGANDO_J1)
+    {
         // J1 termino su jugada
         tiempoJ1 += incremento;
         estado = JUGANDO_J2;
     }
-    else if (lado == 2 && estado == JUGANDO_J2) {
+    else if (lado == 2 && estado == JUGANDO_J2)
+    {
         // J2 termino su jugada
         tiempoJ2 += incremento;
         estado = JUGANDO_J1;
@@ -221,7 +247,8 @@ void cambiarTurno(uint8_t lado) {
 // CONTROL DE BOTONES GRANDES
 // =====================================
 
-void procesarLaterales(uint32_t ahora) {
+void procesarLaterales(uint32_t ahora)
+{
     bool cambio1 = actualizarBoton(boton1, ahora);
     bool cambio2 = actualizarBoton(boton2, ahora);
 
@@ -229,23 +256,30 @@ void procesarLaterales(uint32_t ahora) {
     bool presionado1 = cambio1 && boton1.estable == LOW;
     bool presionado2 = cambio2 && boton2.estable == LOW;
 
-    if (central.estable == LOW) return;
+    if (central.estable == LOW)
+        return;
 
     // Ignorar pulsaciones simultaneas
-    if (presionado1 && presionado2) return;
+    if (presionado1 && presionado2)
+        return;
 
     uint8_t posicion = 0;
 
-    if (presionado1) posicion = 1;
-    if (presionado2) posicion = 2;
+    if (presionado1)
+        posicion = 1;
+    if (presionado2)
+        posicion = 2;
 
-    if (posicion == 0) return;
+    if (posicion == 0)
+        return;
 
     // El mecanismo debe alternar de lado
-    if (posicion == ultimaPosicion) return;
+    if (posicion == ultimaPosicion)
+        return;
 
     // En modo menu: cambiar ritmo
-    if (estado == MENU) {
+    if (estado == MENU)
+    {
         ultimaPosicion = posicion;
         siguienteRitmo();
         return;
@@ -254,7 +288,8 @@ void procesarLaterales(uint32_t ahora) {
     // En modo partida: cambiar turno
     if (estado == LISTO ||
         estado == JUGANDO_J1 ||
-        estado == JUGANDO_J2) {
+        estado == JUGANDO_J2)
+    {
 
         // No aceptar una posicion repetida
         if (estado == JUGANDO_J1 && posicion != 1)
@@ -275,46 +310,53 @@ void procesarLaterales(uint32_t ahora) {
 uint32_t inicioCentral = 0;
 bool accionLarga = false;
 
-void accionCortaCentral() {
-    switch (estado) {
-        case MENU:
-            estado = CONFIRMADO;
-            Serial.println("RITMO CONFIRMADO");
-            break;
+void accionCortaCentral()
+{
+    switch (estado)
+    {
+    case MENU:
+        estado = CONFIRMADO;
+        Serial.println("RITMO CONFIRMADO");
+        break;
 
-        case CONFIRMADO:
-            cargarTiempoElegido();
-            estado = LISTO;
-            ultimoTick = millis();
-            Serial.println("RELOJ LISTO");
-            break;
+    case CONFIRMADO:
+        cargarTiempoElegido();
+        estado = LISTO;
+        ultimoTick = millis();
+        Serial.println("RELOJ LISTO");
+        break;
 
-        case JUGANDO_J1:
-        case JUGANDO_J2:
-            estadoAntesPausa = estado;
-            estado = PAUSADO;
-            Serial.println("PAUSA");
-            break;
+    case JUGANDO_J1:
+    case JUGANDO_J2:
+        estadoAntesPausa = estado;
+        estado = PAUSADO;
+        Serial.println("PAUSA");
+        break;
 
-        case PAUSADO:
-            estado = estadoAntesPausa;
-            ultimoTick = millis();
-            Serial.println("REANUDADO");
-            break;
+    case PAUSADO:
+        estado = estadoAntesPausa;
+        ultimoTick = millis();
+        Serial.println("REANUDADO");
+        break;
 
-        default:
-            break;
+    default:
+        break;
     }
 }
 
-void procesarCentral(uint32_t ahora) {
+void procesarCentral(uint32_t ahora)
+{
     bool cambio = actualizarBoton(central, ahora);
 
-    if (cambio) {
-        if (central.estable == LOW) {
+    if (cambio)
+    {
+        if (central.estable == LOW)
+        {
             inicioCentral = ahora;
             accionLarga = false;
-        } else if (!accionLarga) {
+        }
+        else if (!accionLarga)
+        {
             accionCortaCentral();
         }
     }
@@ -326,7 +368,8 @@ void procesarCentral(uint32_t ahora) {
 
     // Volver al menu desde confirmacion
     if (estado == CONFIRMADO &&
-        duracion >= VOLVER_MS) {
+        duracion >= VOLVER_MS)
+    {
 
         estado = MENU;
         accionLarga = true;
@@ -340,7 +383,8 @@ void procesarCentral(uint32_t ahora) {
          estado == JUGANDO_J2 ||
          estado == PAUSADO ||
          estado == FINALIZADO) &&
-        duracion >= RESET_MS) {
+        duracion >= RESET_MS)
+    {
 
         reiniciarPartida();
         accionLarga = true;
@@ -354,8 +398,8 @@ void procesarCentral(uint32_t ahora) {
 void dibujarTiempo(
     Adafruit_SSD1306 &oled,
     uint8_t jugador,
-    uint32_t tiempo
-) {
+    uint32_t tiempo)
+{
     oled.clearDisplay();
     oled.setTextColor(SSD1306_WHITE);
     oled.setTextSize(1);
@@ -372,8 +416,8 @@ void dibujarTiempo(
 
     char reloj[12];
     snprintf(reloj, sizeof(reloj), "%02lu:%02lu",
-        (unsigned long)minutos,
-        (unsigned long)segundos);
+             (unsigned long)minutos,
+             (unsigned long)segundos);
 
     oled.setTextSize(3);
     oled.setCursor(19, 23);
@@ -383,14 +427,17 @@ void dibujarTiempo(
 
     const char *mensaje = "EN ESPERA";
 
-    if (estado == PAUSADO) {
+    if (estado == PAUSADO)
+    {
         mensaje = "PAUSADO";
     }
-    else if (estado == FINALIZADO && tiempo == 0) {
+    else if (estado == FINALIZADO && tiempo == 0)
+    {
         mensaje = "SIN TIEMPO";
     }
     else if ((jugador == 1 && estado == JUGANDO_J1) ||
-             (jugador == 2 && estado == JUGANDO_J2)) {
+             (jugador == 2 && estado == JUGANDO_J2))
+    {
         mensaje = "CORRIENDO";
     }
 
@@ -399,7 +446,8 @@ void dibujarTiempo(
     oled.display();
 }
 
-void dibujarMenu() {
+void dibujarMenu()
+{
     oled1.clearDisplay();
     oled2.clearDisplay();
 
@@ -427,9 +475,12 @@ void dibujarMenu() {
     oled2.setTextSize(2);
     oled2.setCursor(22, 25);
 
-    if (estado == MENU) {
+    if (estado == MENU)
+    {
         oled2.print("ELEGIR");
-    } else {
+    }
+    else
+    {
         oled2.print("EMPEZAR");
     }
 
@@ -441,18 +492,21 @@ void dibujarMenu() {
     oled2.display();
 }
 
-void actualizarPantallas() {
-    if (estado == MENU || estado == CONFIRMADO) {
+void actualizarPantallas()
+{
+    if (estado == MENU || estado == CONFIRMADO)
+    {
         dibujarMenu();
-    } else {
+    }
+    else
+    {
         dibujarTiempo(oled1, 1, tiempoJ1);
         dibujarTiempo(oled2, 2, tiempoJ2);
     }
 }
 
-
-
-void iniciarWiFi() {
+void iniciarWiFi()
+{
     Serial.println();
     Serial.println("ANDESCHESS LIVE - WIFI");
     Serial.println("Iniciando conexion...");
@@ -464,11 +518,13 @@ void iniciarWiFi() {
     ultimoIntentoWiFi = millis();
 }
 
-void actualizarWiFi(uint32_t ahora) {
+void actualizarWiFi(uint32_t ahora)
+{
     bool conectado = WiFi.status() == WL_CONNECTED;
 
     // Detectar nueva conexion
-    if (conectado && !wifiConectadoAnterior) {
+    if (conectado && !wifiConectadoAnterior)
+    {
         Serial.println();
         Serial.println("WIFI CONECTADO");
 
@@ -481,7 +537,8 @@ void actualizarWiFi(uint32_t ahora) {
     }
 
     // Detectar perdida de conexion
-    if (!conectado && wifiConectadoAnterior) {
+    if (!conectado && wifiConectadoAnterior)
+    {
         Serial.println("WIFI DESCONECTADO");
         Serial.println("El reloj sigue funcionando normalmente");
     }
@@ -490,19 +547,20 @@ void actualizarWiFi(uint32_t ahora) {
 
     // Reintento periodico sin esperar en un bucle
     if (!conectado &&
-        ahora - ultimoIntentoWiFi >= WIFI_REINTENTO_MS) {
+        ahora - ultimoIntentoWiFi >= WIFI_REINTENTO_MS)
+    {
 
         ultimoIntentoWiFi = ahora;
         WiFi.reconnect();
     }
 }
 
-
 // =====================================
 // INICIALIZACION
 // =====================================
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
 
     iniciarBoton(boton1);
@@ -520,15 +578,19 @@ void setup() {
     BUS2.begin(18, 19, 100000);
 
     if (!oled1.begin(SSD1306_SWITCHCAPVCC,
-                     OLED_ADDR, true, false)) {
+                     OLED_ADDR, true, false))
+    {
         Serial.println("ERROR OLED 1");
-        while (true) delay(1000);
+        while (true)
+            delay(1000);
     }
 
     if (!oled2.begin(SSD1306_SWITCHCAPVCC,
-                     OLED_ADDR, true, false)) {
+                     OLED_ADDR, true, false))
+    {
         Serial.println("ERROR OLED 2");
-        while (true) delay(1000);
+        while (true)
+            delay(1000);
     }
 
     cargarTiempoElegido();
@@ -540,21 +602,138 @@ void setup() {
     Serial.println("SELECCIONAR RITMO");
     actualizarPantallas();
     iniciarWiFi();
+    iniciarFirebaseAuth();
+    iniciarFirebaseSync();
 }
 
 // =====================================
 // BUCLE PRINCIPAL
 // =====================================
 
-void loop() {
+void loop()
+{
     uint32_t ahora = millis();
+
+    // =====================================
+    // FUNCIONAMIENTO DEL RELOJ FISICO
+    // =====================================
 
     actualizarTiempo(ahora);
     procesarCentral(ahora);
     procesarLaterales(ahora);
     actualizarWiFi(ahora);
 
-    if (ahora - ultimaPantalla >= 100) {
+    // =====================================
+    // ANDESCHESS LIVE - TIEMPOS REALES
+    // =====================================
+
+    static bool primerEnvioRealizado = false;
+    static uint32_t ultimoEnvioCloud = 0;
+    static Estado ultimoEstadoCloud = MENU;
+
+    if (!firebaseAutenticado())
+    {
+        // En una futura reconexion se enviara
+        // nuevamente el estado actual del reloj.
+        primerEnvioRealizado = false;
+    }
+    else
+    {
+        bool cambioEstado =
+            estado != ultimoEstadoCloud;
+
+        bool jugando =
+            estado == JUGANDO_J1 ||
+            estado == JUGANDO_J2;
+
+        bool intervaloCumplido =
+            jugando &&
+            (uint32_t)(ahora - ultimoEnvioCloud) >= 5000UL;
+
+        if (!primerEnvioRealizado ||
+            cambioEstado ||
+            intervaloCumplido)
+        {
+            EstadoRelojCloud datos = {};
+
+            // Jugador 1 = Blancas
+            // Jugador 2 = Negras
+            datos.whiteMs = tiempoJ1;
+            datos.blackMs = tiempoJ2;
+
+            // Estado de la partida
+            if (estado == LISTO)
+            {
+                datos.status = EstadoPartidaCloud::READY;
+            }
+            else if (jugando)
+            {
+                datos.status = EstadoPartidaCloud::PLAYING;
+            }
+            else if (estado == PAUSADO)
+            {
+                datos.status = EstadoPartidaCloud::PAUSED;
+            }
+            else if (estado == FINALIZADO)
+            {
+                datos.status = EstadoPartidaCloud::FINISHED;
+            }
+            else
+            {
+                datos.status = EstadoPartidaCloud::WAITING;
+            }
+
+            // Jugador activo
+            if (estado == JUGANDO_J1)
+            {
+                datos.activePlayer = 1;
+            }
+            else if (estado == JUGANDO_J2)
+            {
+                datos.activePlayer = 2;
+            }
+            else
+            {
+                datos.activePlayer = 0;
+            }
+
+            // =====================================
+            // ANDESCHESS LIVE - TIMESTAMP
+            // =====================================
+
+            // Obtener la hora UTC del ESP32,
+            // sincronizada previamente mediante NTP.
+            struct timeval tv;
+
+            if (gettimeofday(&tv, nullptr) == 0 &&
+                tv.tv_sec >= 1700000000)
+            {
+                datos.sampledAtMs =
+                    (uint64_t)tv.tv_sec * 1000ULL +
+                    (uint64_t)tv.tv_usec / 1000ULL;
+            }
+            else
+            {
+                // La hora todavia no es valida.
+                datos.sampledAtMs = 0;
+            }
+
+            // Enviar una copia del estado y su
+            // instante de lectura a la cola FreeRTOS.
+            actualizarEstadoCloud(datos);
+
+            primerEnvioRealizado = true;
+            ultimoEnvioCloud = ahora;
+            ultimoEstadoCloud = estado;
+        }
+    }
+
+    // =====================================
+    // ACTUALIZACION DE PANTALLAS OLED
+    // =====================================
+
+    if (ahora - ultimaPantalla >= 100)
+    {
         ultimaPantalla = ahora;
         actualizarPantallas();
     }
